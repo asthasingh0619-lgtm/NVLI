@@ -6,27 +6,3 @@ py-vapid==1.9.4
 requests==2.32.5
 apscheduler==3.11.2
 pytz==2026.1
-sqlite3==0.0.0  # included in standard library, no need to install
-aiohttp==3.13.3
-http-ece==1.2.1
-aiohappyeyeballs==2.6.1
-aiosignal==1.4.0
-attrs==25.4.0
-frozenlist==1.8.0
-multidict==6.7.1
-propcache==0.4.1
-pycparser==3.0
-certifi==2026.2.25
-charset-normalizer==3.4.5
-click==8.3.1
-cryptography==46.0.5
-h11==0.16.0
-idna==3.11
-MarkupSafe==3.0.3
-typing-extensions==4.15.0
-typing-inspection==0.4.2
-tzlocal==5.3.1
-starlette==0.52.1
-pydantic==2.12.5
-pydantic-core==2.41.5
-anyio==4.12.1
