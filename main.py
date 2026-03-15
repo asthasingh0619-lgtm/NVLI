@@ -25,8 +25,9 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
 
+if os.path.exists("static"):
+    app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 VAPID_PUBLIC_KEY = "BDKhTIxI05AlXXk_zbJxESluEqbGXe25m6k5BuIXHWHQhS4Eh58JajT7IGdR1jwa9bjPZLD_LxM58vrNIiHEaS8"
