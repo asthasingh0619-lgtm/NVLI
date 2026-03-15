@@ -2,6 +2,5 @@ fastapi
 uvicorn
 pywebpush
 jinja2
-apscheduler
-sqlalchemy==2.0.29
+apscheduler==3.10.4
 pytz
