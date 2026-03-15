@@ -6,8 +6,6 @@ from fastapi.templating import Jinja2Templates
 from pywebpush import webpush, WebPushException
 from typing import Optional
 from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.executors.pool import ThreadPoolExecutor
-from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from datetime import datetime
 import pytz
 import sqlite3
@@ -27,7 +25,6 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-# Mount static folder
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 templates = Jinja2Templates(directory="templates")
@@ -36,7 +33,7 @@ VAPID_PUBLIC_KEY = "BDKhTIxI05AlXXk_zbJxESluEqbGXe25m6k5BuIXHWHQhS4Eh58JajT7IGdR
 VAPID_PRIVATE_KEY = "nBBu_wCGpRaX_RZ0Te0RrygMUNQT5AhuQ25MnHP10_I"
 
 # -----------------------
-# Database setup
+# Database
 # -----------------------
 DB_FILE = "notifications.db"
 conn = sqlite3.connect(DB_FILE, check_same_thread=False)
@@ -61,29 +58,21 @@ CREATE TABLE IF NOT EXISTS scheduled_notifications (
     run_time TIMESTAMP
 )
 """)
+
 conn.commit()
 
 # -----------------------
-# APScheduler setup
+# Scheduler (NO SQLAlchemy)
 # -----------------------
-jobstores = {"default": SQLAlchemyJobStore(url="sqlite:///jobs.sqlite")}
-executors = {"default": ThreadPoolExecutor(10)}
+scheduler = BackgroundScheduler(timezone=pytz.UTC)
 
-scheduler = BackgroundScheduler(
-    jobstores=jobstores,
-    executors=executors,
-    timezone=pytz.UTC
-)
-
-# Start scheduler when FastAPI starts
 @app.on_event("startup")
 def start_scheduler():
     if not scheduler.running:
         scheduler.start()
 
-# Stop scheduler when app stops
 @app.on_event("shutdown")
-def shutdown_scheduler():
+def stop_scheduler():
     if scheduler.running:
         scheduler.shutdown()
 
@@ -93,6 +82,7 @@ def shutdown_scheduler():
 def get_subscribers():
     cursor.execute("SELECT endpoint, p256dh, auth, subscribed_at FROM subscribers")
     rows = cursor.fetchall()
+
     subs = []
     for r in rows:
         subs.append({
@@ -100,9 +90,12 @@ def get_subscribers():
             "keys": {"p256dh": r[1], "auth": r[2]},
             "subscribed_at": datetime.fromisoformat(r[3])
         })
+
     return subs
 
+
 def send_notification_task(title, message, url=None, job_id=None):
+
     subs = get_subscribers()
     dead_subs = []
 
@@ -111,7 +104,9 @@ def send_notification_task(title, message, url=None, job_id=None):
     icon_url = f"{host}/static/ima1.png"
 
     for sub in subs:
+
         try:
+
             payload = json.dumps({
                 "title": title,
                 "body": message,
@@ -133,12 +128,15 @@ def send_notification_task(title, message, url=None, job_id=None):
             )
 
         except WebPushException as ex:
+
             print("Push failed:", ex)
+
             if ex.response and ex.response.status_code == 410:
                 dead_subs.append(sub["endpoint"])
 
     for ep in dead_subs:
         cursor.execute("DELETE FROM subscribers WHERE endpoint=?", (ep,))
+
     conn.commit()
 
 # -----------------------
@@ -152,27 +150,26 @@ async def admin_page(request: Request):
     )
 
 # -----------------------
-# Subscribe endpoint
+# Subscribe
 # -----------------------
 @app.post("/subscribe")
 async def subscribe(subscription: dict):
+
     now = datetime.utcnow().isoformat()
 
-    try:
-        cursor.execute(
-            "INSERT OR IGNORE INTO subscribers (endpoint, p256dh, auth, subscribed_at) VALUES (?, ?, ?, ?)",
-            (
-                subscription["endpoint"],
-                subscription["keys"]["p256dh"],
-                subscription["keys"]["auth"],
-                now
-            )
+    cursor.execute(
+        "INSERT OR IGNORE INTO subscribers (endpoint, p256dh, auth, subscribed_at) VALUES (?, ?, ?, ?)",
+        (
+            subscription["endpoint"],
+            subscription["keys"]["p256dh"],
+            subscription["keys"]["auth"],
+            now
         )
-        conn.commit()
-        return {"message": "Subscribed"}
+    )
 
-    except Exception as e:
-        return {"error": str(e)}
+    conn.commit()
+
+    return {"message": "Subscribed"}
 
 # -----------------------
 # Send notification
@@ -186,6 +183,7 @@ async def send_notification(
 ):
 
     if send_at and send_at.strip():
+
         try:
             run_time = datetime.fromisoformat(send_at)
         except:
@@ -222,108 +220,8 @@ async def send_notification(
     return {"status": "Notification Sent"}
 
 # -----------------------
-# List notifications
-# -----------------------
-@app.get("/notifications")
-async def list_notifications():
-
-    cursor.execute(
-        "SELECT id, title, message, url, run_time FROM scheduled_notifications ORDER BY run_time DESC"
-    )
-
-    rows = cursor.fetchall()
-
-    result = []
-
-    ist = pytz.timezone("Asia/Kolkata")
-
-    for r in rows:
-
-        run_time = datetime.fromisoformat(r[4]).astimezone(ist)
-
-        sent = datetime.utcnow().replace(
-            tzinfo=pytz.UTC
-        ) >= datetime.fromisoformat(r[4]).astimezone(pytz.UTC)
-
-        result.append({
-            "id": r[0],
-            "title": r[1],
-            "message": r[2],
-            "url": r[3],
-            "send_at": r[4],
-            "sent": sent,
-            "time": run_time.strftime("%Y-%m-%d %H:%M:%S")
-        })
-
-    return result
-
-# -----------------------
-# Delete notification
-# -----------------------
-@app.delete("/notifications/{job_id}")
-async def delete_notification(job_id: str):
-
-    try:
-        scheduler.remove_job(job_id)
-    except:
-        pass
-
-    cursor.execute(
-        "DELETE FROM scheduled_notifications WHERE id=?",
-        (job_id,)
-    )
-
-    conn.commit()
-
-    return {"status": "Deleted"}
-
-# -----------------------
-# Update notification
-# -----------------------
-@app.put("/notifications/{job_id}")
-async def update_notification(
-    job_id: str,
-    title: str = Form(...),
-    message: str = Form(...),
-    send_at: str = Form(...),
-    url: Optional[str] = Form(None)
-):
-
-    try:
-        scheduler.remove_job(job_id)
-    except:
-        pass
-
-    run_time = datetime.fromisoformat(send_at)
-
-    ist = pytz.timezone("Asia/Kolkata")
-
-    if run_time.tzinfo is None:
-        run_time = ist.localize(run_time)
-
-    utc_time = run_time.astimezone(pytz.UTC)
-
-    cursor.execute(
-        "UPDATE scheduled_notifications SET title=?, message=?, run_time=?, url=? WHERE id=?",
-        (title, message, utc_time.isoformat(), url, job_id)
-    )
-
-    scheduler.add_job(
-        send_notification_task,
-        "date",
-        run_date=utc_time,
-        args=[title, message, url, job_id],
-        id=job_id
-    )
-
-    conn.commit()
-
-    return {"status": "Updated"}
-
-# -----------------------
 # Home
 # -----------------------
 @app.get("/")
 def home():
     return {"status": "FastAPI running"}
-    
